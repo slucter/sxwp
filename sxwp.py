@@ -172,10 +172,11 @@ def main():
     def render_block(current_url):
         nonlocal block_height
         if block_height > 0:
-            print(f"\033[{block_height}F", end="")
+            # gunakan escape sequence yang lebih umum: cursor up (A) + clear to end (J)
+            print(f"\033[{block_height}A", end="")
             print("\033[J", end="")
-        print(f"{BLUE}[ SCANNING ] {processed_count}/{total_targets} target selesai | Terakhir: {current_url}{RESET}")
-        print(f"{YELLOW}Vuln: {vuln_count} | Not Vuln: {not_vuln_count} | Blocked: {blocked_count} | Admin: {admin_count} | User: {user_count}{RESET}")
+        print(f"{BLUE}[ SCANNING ] {processed_count}/{total_targets} target selesai | Terakhir: {current_url}{RESET}", flush=True)
+        print(f"{YELLOW}Vuln: {vuln_count} | Not Vuln: {not_vuln_count} | Blocked: {blocked_count} | Admin: {admin_count} | User: {user_count}{RESET}", flush=True)
         for ts, url_v, user_v, pass_v, role, is_2fa in vuln_entries:
             label = "ADMIN" if role == "admin" else "USER"
             color = RED if role == "admin" else YELLOW
