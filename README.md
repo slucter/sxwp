@@ -36,7 +36,7 @@ Penggunaan
 Jalankan dari direktori project:
 
 ```bash
-python wpshoot.py -i target.txt -t 10
+python sxwp.py -i target.txt -t 10
 ```
 
 Parameter:
@@ -56,7 +56,7 @@ Help
 Untuk melihat help dan opsi yang tersedia:
 
 ```bash
-python wpshoot.py -h
+python sxwp.py -h
 ```
 
 Jika argumen yang diberikan salah atau kurang, help dan usage akan ditampilkan secara otomatis.
