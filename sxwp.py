@@ -100,7 +100,8 @@ def attempt_login(target_url, username, password, wp_path):
             "you do not currently have privileges on this site",
             "you do not have sufficient permissions",
             "the current user doesn't have the",
-            "you don't have permission to access this resource",
+            "has been a critical error",
+            "you don't have permission to access",
         ]
         forbidden = any(p in admin_body for p in forbidden_phrases)
         is_2fa    = is_2fa or any(p in admin_body for p in twofa_phrases)
