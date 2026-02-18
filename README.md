@@ -40,14 +40,22 @@ python sxwp.py -i target.txt -t 10
 ```
 
 Parameter:
-- `-i, --input`   : path ke file payload (wajib)
-- `-t, --threads` : jumlah thread worker (opsional, default 10)
+- `-i, --input`    : path ke file payload (wajib)
+- `-t, --threads`  : jumlah thread worker (opsional, default 10)
+- `-path, --path`  : path instalasi WordPress, contoh `/blog` (opsional)
 
 Format file `target.txt`:
 
 ```text
 https://example.com:admin:password123
 https://example.org:user@example.org:SuperSecret!
+```
+
+Jika Anda menggunakan `-path`, maka URL di payload sebaiknya hanya domain/root,
+contoh:
+
+```text
+https://example.com:admin:password123      # dan jalankan dengan: -path /blog
 ```
 
 
@@ -64,12 +72,14 @@ Jika argumen yang diberikan salah atau kurang, help dan usage akan ditampilkan s
 
 Output
 ------
-- Folder `output/` akan berisi file `vuln.txt`.
-- Setiap baris `vuln.txt` berisi payload yang berhasil (format sama seperti input).
+- Folder `output/` akan berisi sub-folder per eksekusi dengan pola nama `sxwp-vuln-YYYYMMDD-HHMMSS/`.
+- Di dalam setiap folder terdapat:
+  - `admin.txt` : semua kombinasi yang berhasil login dan terdeteksi sebagai ADMIN.
+  - `user.txt`  : semua kombinasi yang berhasil login dan terdeteksi sebagai USER.
+- Setiap baris file tersebut berisi payload yang berhasil (format sama seperti input).
 
 
 Catatan
 -------
 - Gunakan tool ini hanya pada sistem yang Anda miliki atau telah diberi izin resmi.
 - Penulis tidak bertanggung jawab atas penyalahgunaan tool ini.
-
