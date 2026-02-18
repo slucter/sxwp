@@ -193,10 +193,10 @@ def main():
 
     def render_block(current_url):
         nonlocal block_height
-        if os.name == "nt":
-            if block_height > 0:
-                print(f"\033[{block_height}A", end="")
-                print("\033[J", end="")
+        if block_height > 0:
+            # gunakan escape sequence yang lebih umum: cursor up (A) + clear to end (J)
+            print(f"\033[{block_height}A", end="")
+            print("\033[J", end="")
         print(f"{BLUE}[ SCANNING ] {processed_count}/{total_targets} target selesai | Terakhir: {current_url}{RESET}", flush=True)
         print(f"{YELLOW}Vuln: {vuln_count} | Not Vuln: {not_vuln_count} | Blocked: {blocked_count} | Admin: {admin_count} | User: {user_count}{RESET}", flush=True)
         for ts, url_v, user_v, pass_v, role, is_2fa in vuln_entries:
@@ -228,8 +228,8 @@ def main():
                     user_count += 1
                 ts = datetime.now().strftime("%H:%M:%S")
                 vuln_entries.append((ts, url, user, password, role, is_2fa))
-                target_output = admin_output_path if role == "admin" else user_output_path
                 with output_lock:
+                    target_output = admin_output_path if role == "admin" else user_output_path
                     with open(target_output, "a", encoding="utf-8") as f:
                         f.write(f"{url}:{user}:{password}\n")
             else:
@@ -238,8 +238,8 @@ def main():
 
     print()
     print(f"{GREEN}[✓] Selesai.{RESET}")
-    print(f"{GREEN}    - Hasil ADMIN: {admin_output_path}{RESET}")
-    print(f"{GREEN}    - Hasil USER : {user_output_path}{RESET}")
+    print(f"{GREEN}/output/{run_dir_name}/admin.txt{RESET}")
+    print(f"{GREEN}/output/{run_dir_name}/user.txt{RESET}")
 
 
 if __name__ == "__main__":
