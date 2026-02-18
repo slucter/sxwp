@@ -200,7 +200,7 @@ def main():
     #    5.42% ████████── 13/19
     #
     with Live(make_panel(), console=console, refresh_per_second=10,
-              vertical_overflow="visible") as live:
+              vertical_overflow="visible", transient=True) as live:
         with ThreadPoolExecutor(max_workers=args.threads) as executor:
             futures = [executor.submit(process_target, line, args.path) for line in lines]
             for future in as_completed(futures):
