@@ -140,6 +140,26 @@ def send_telegram_admin(token, chat_id, url, username, password, extra):
         return
 
 
+def send_telegram_done(token, chat_id, total, vuln, not_vuln, blocked, admin_c, user_c, run_dir):
+    if not token or not chat_id:
+        return
+    text = (
+        "[SXWP DONE]\n"
+        f"Total: {total}\n"
+        f"Vuln: {vuln} | Not Vuln: {not_vuln} | Blocked: {blocked}\n"
+        f"Admin: {admin_c} | User: {user_c}\n"
+        f"Output: {run_dir}"
+    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": text},
+            timeout=10,
+        )
+    except Exception:
+        return
+
+
 def main():
     parser = ShooterArgumentParser(
         description="SXWordPress Shooter V.10 - sxtools",
@@ -265,6 +285,18 @@ def main():
 
     # ── Summary ───────────────────────────────────────────────────────────────
     console.print(f"[green][✓] Selesai! Output: {run_dir}[/green]\n")
+    if use_telegram:
+        send_telegram_done(
+            args.telegram_token,
+            args.chat_id,
+            total,
+            vuln,
+            not_vuln,
+            blocked,
+            admin_c,
+            user_c,
+            run_dir,
+        )
 
 
 if __name__ == "__main__":
